@@ -1169,3 +1169,262 @@ $(document).ready(function() {
   	validate_field($(this)[0].id, $(this)[0].id.replace("i_", ""), $(this)[0].value, $(this)[0].min, $(this)[0].max)
 	})
 })
+
+/* Analytics Logic */
+
+// Headless version of change_item to populate sim_data without DOM lag
+function headless_setup_item(hrid, temp_sim_data) {
+  const item = enhancable_items.find((a) => a.hrid == hrid);
+  if (!item) return false;
+
+  // Reset temp data
+  temp_sim_data.mat_1 = temp_sim_data.mat_2 = temp_sim_data.mat_3 = temp_sim_data.mat_4 = temp_sim_data.mat_5 = 0;
+  temp_sim_data.prc_1 = temp_sim_data.prc_2 = temp_sim_data.prc_3 = temp_sim_data.prc_4 = temp_sim_data.prc_5 = 0;
+  temp_sim_data.coins = 0;
+
+  // Materials
+  if (item.enhancementCosts) {
+    for (let i = 0; i < item.enhancementCosts.length; i++) {
+      let elm = item.enhancementCosts[i];
+      if (elm.itemHrid == "/items/coin") {
+        temp_sim_data.coins = elm.count;
+      } else {
+        temp_sim_data["mat_" + (i + 1)] = elm.count;
+        temp_sim_data["prc_" + (i + 1)] = get_full_item_price(elm.itemHrid);
+      }
+    }
+  }
+
+  // Base Stats
+  temp_sim_data.item_level = item.itemLevel;
+  
+  // Calculate Speed/Bonus (Reusing existing logic logic but simplified)
+  let tea_speed_bonus = save_data.tea_enhancing ? 2 * guzzling_bonus : save_data.tea_super_enhancing ? 4 * guzzling_bonus : save_data.tea_ultra_enhancing ? 6 * guzzling_bonus : 0;
+  
+  // Recalculate Total Bonus specifically for this item level
+  let enhancer_bonus_val = 0;
+  if(save_data.selected_enhancer) {
+      let key = "/items/" + save_data.selected_enhancer.substring(4);
+      let enhancer_item = enhancable_items.find((a) => a.hrid == key);
+      if(enhancer_item) {
+          enhancer_bonus_val = enhancer_item.equipmentDetail.noncombatStats.enhancingSuccess * 100 * enhance_bonus[save_data.enhancer_level];
+      }
+  }
+
+  let effective_level = save_data.enhancing_level + (save_data.tea_enhancing ? 3 * guzzling_bonus : 0) + (save_data.tea_super_enhancing ? 6 * guzzling_bonus : 0) + (save_data.tea_ultra_enhancing ? 8 * guzzling_bonus : 0);
+  
+  if (effective_level >= temp_sim_data.item_level)
+    temp_sim_data.total_bonus = 1 + (0.05 * (effective_level + save_data.observatory_level - temp_sim_data.item_level) + enhancer_bonus_val) / 100;
+  else
+    temp_sim_data.total_bonus = (1 - (0.5 * (1 - (effective_level) / temp_sim_data.item_level))) + ((0.05 * save_data.observatory_level) + enhancer_bonus_val) / 100;
+
+  // Calculate Attempt Time
+  const calc_speed = function(item_hrid, level) {
+      if(item_hrid != "/items/philosophers_necklace") {
+        let entry = enhancable_items.find((a) => a.hrid == item_hrid);
+        return entry ? entry.equipmentDetail.noncombatStats.enhancingSpeed * 100 * enhance_bonus[level] : 0;
+      } else {
+        let entry = enhancable_items.find((a) => a.hrid == item_hrid);
+        return entry ? entry.equipmentDetail.noncombatStats.skillingSpeed * 100 * (((enhance_bonus[level]-1)*5)+1) : 0;
+      }
+  };
+
+  let item_bonus = (save_data.use_enchanted ? calc_speed("/items/enchanted_gloves", save_data.enchanted_level) : 0.0) +
+      (save_data.use_enhancer_top ? calc_speed("/items/enhancers_top", save_data.enhancer_top_level) : 0.0) +
+      (save_data.use_enhancer_bot ? calc_speed("/items/enhancers_bottoms", save_data.enhancer_bot_level) : 0.0) +
+      (save_data.use_philo_neck ? calc_speed("/items/philosophers_necklace", save_data.philo_neck_level) : 0.0) +
+      (save_data.use_enhancing_buff ? 19.5 + (save_data.enhancing_buff_level * 0.5) : 0.0);
+
+  let temp_time = (12 / (1 + (save_data.enhancing_level > temp_sim_data.item_level ? ((effective_level + save_data.observatory_level - temp_sim_data.item_level) + item_bonus + tea_speed_bonus) / 100 : (save_data.observatory_level + item_bonus + tea_speed_bonus) / 100)));
+  temp_sim_data.attempt_time = Number(temp_time);
+
+  return item; // Return item object for later use
+}
+
+function run_analytics() {
+  $("#analytics_status").text("Calculating...");
+  
+  // Use a timeout to let the UI update before freezing for calculation
+  setTimeout(() => {
+    const tableBody = $("#analytics_table_body");
+    tableBody.empty();
+    
+    let analytics_data = [];
+    let temp_sim_data = structuredClone(sim_data); // Clone base structure
+    
+    // Cache common prices
+    const base_stop_at = save_data.stop_at;
+    
+    enhancable_items.forEach((item) => {
+      // Setup data without DOM manipulation
+      headless_setup_item(item.hrid, temp_sim_data);
+      
+      let base_item_price = get_full_item_price(item.hrid);
+      
+      // Determine protection items available for this item
+      let protect_item_hrids = item.protectionItemHrids == null ? [item.hrid] : [item.hrid].concat(item.protectionItemHrids);
+      
+      // Find optimal protection strategy (cheapest cost)
+      let best_result = null;
+      let min_cost = Number.MAX_VALUE;
+
+      // We will check: No Protect (prot_at > stop_at), and Protect at every level from 2 to stop_at
+      // To save time, we check: No Prot, Prot @ 2, Prot @ 3, Prot @ Target
+      let check_prot_levels = [];
+      for(let p = 2; p <= base_stop_at; p++) check_prot_levels.push(p);
+      
+      // Find cheapest protection item
+      let best_prot_item_price = Number.MAX_VALUE;
+      
+      protect_item_hrids.forEach(prot_hrid => {
+          if(prot_hrid.includes("_refined")) return; // Skip refined for simplicity unless needed
+          let p_price = get_full_item_price(prot_hrid);
+          if(p_price < best_prot_item_price) best_prot_item_price = p_price;
+      });
+
+      temp_sim_data.protect_price = best_prot_item_price;
+
+      // Calculate logic
+      check_prot_levels.forEach(prot_at => {
+        temp_sim_data.protect_at = prot_at;
+        
+        // Use the existing math function
+        let res = Enhancelate(save_data, temp_sim_data);
+        
+        let mat_cost = 
+          temp_sim_data.mat_1 * res.actions * temp_sim_data.prc_1 +
+          temp_sim_data.mat_2 * res.actions * temp_sim_data.prc_2 +
+          temp_sim_data.mat_3 * res.actions * temp_sim_data.prc_3 +
+          temp_sim_data.mat_4 * res.actions * temp_sim_data.prc_4 +
+          temp_sim_data.mat_5 * res.actions * temp_sim_data.prc_5 +
+          temp_sim_data.protect_price * res.protect_count +
+          temp_sim_data.coins * res.actions;
+
+        // Total cost includes the base item burned if it breaks (accounted for by protection logic + failure rate implicitly in Enhancelate?)
+        // Actually Enhancelate returns 'actions' and 'protect_count'.
+        // If not protecting, item is lost? Enhancelate assumes Infinite source.
+        // Wait, Enhancelate logic:
+        // protects = number of times we paid for protection.
+        // If we don't protect, the Markov chain implies we restart from 0.
+        // The cost of restarting from 0 is implied in the "actions" count?
+        // NO. "actions" is enhancement attempts.
+        // If we fail without protect, we lose the item. We need a new Base Item.
+        // We need to know how many Base Items are consumed.
+        
+        // In the main tool, `ttl_cost` adds `base_price`.
+        // `Enhancelate` returns actions.
+        // Logic check: The main tool assumes you KEEP the item if protected.
+        // If prot_at is used, you consume (protect_count) Protection Items.
+        // You consume 1 Base Item (the one you end up with).
+        // BUT if you fail *before* protection level, you lose the item and need a new one.
+        // The main tool logic `all_results` calculation:
+        // `targets[targetIndex][protectIndex].mat_cost = ...`
+        // `ttl_cost = (base_price + mat_cost ...)`
+        // This implies only 1 base item is ever used? That's only true if you protect from +0.
+        // If you protect from +2, and fail at +1 -> +0? No, +1 -> Broken.
+        // MWI Mechanics: Fail below protection = Item Lost. Fail above/at protection = Item Downgrade (or saved by Mirror).
+        
+        // For the sake of this tool's consistency, we use the tool's existing cost logic:
+        // Cost = Base Item + Material Costs + Protect Costs.
+        // Note: The current simulator logic might be slightly optimistic for non-protected low levels, 
+        // but we will stick to its `mat_cost + base_price` formula for consistency.
+        
+        let total_cost = base_item_price + mat_cost;
+        
+        if(total_cost < min_cost) {
+          min_cost = total_cost;
+          best_result = {
+            res: res,
+            cost: total_cost
+          };
+        }
+      });
+
+      if(best_result) {
+        let vendor_price = item.sellPrice * (1 + (base_stop_at * 0.1)); // Rough estimate of +X vendor value if unknown
+        // Note: Usually result sell price isn't in game_data. We calculate Loss based on Cost.
+        // Vendor price of result is usually negligible compared to cost, but we subtract it for "Loss".
+        let net_loss = best_result.cost - vendor_price; 
+        if(net_loss < 1) net_loss = 1; // Prevent div by zero
+
+        let xp_ratio = best_result.res.exp / net_loss;
+
+        analytics_data.push({
+          name: item.name,
+          hrid: item.hrid,
+          level: item.itemLevel,
+          actions: best_result.res.actions,
+          xp: best_result.res.exp,
+          cost: best_result.cost,
+          loss: net_loss,
+          ratio: xp_ratio
+        });
+      }
+    });
+
+    // Default Sort: XP Ratio Descending
+    analytics_data.sort((a, b) => b.ratio - a.ratio);
+
+    // Render
+    analytics_data.forEach(d => {
+      let row = `<tr class="analytics_row">
+        <td class="results_data_cells" style="text-align: left; display:flex; align-items:center; gap:5px;">
+           <div style="width:24px; height:24px;"><svg style="width:100%; height:100%;"><use xlink:href="#${d.hrid.substring(7)}"></use></svg></div>
+           ${d.name}
+        </td>
+        <td class="results_data_cells">${d.level}</td>
+        <td class="results_data_cells">${d.actions.toFixed(1)}</td>
+        <td class="results_data_cells">${d.xp.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+        <td class="results_data_cells negative-profit">${d.loss.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+        <td class="results_data_cells" style="font-weight:bold;">${d.ratio.toFixed(4)}</td>
+      </tr>`;
+      tableBody.append(row);
+    });
+
+    $("#analytics_status").text(`Analyzed ${analytics_data.length} items. Target: +${base_stop_at}`);
+  }, 100);
+}
+
+// Analytics Table Sorting
+let sortOrder = 1;
+function sortTable(n, type) {
+  sortOrder *= -1;
+  const table = document.getElementById("analytics_table");
+  let rows, switching, i, x, y, shouldSwitch;
+  switching = true;
+  while (switching) {
+    switching = false;
+    rows = table.rows;
+    for (i = 1; i < (rows.length - 1); i++) {
+      shouldSwitch = false;
+      x = rows[i].getElementsByTagName("TD")[n];
+      y = rows[i + 1].getElementsByTagName("TD")[n];
+      
+      let valX = x.innerText; 
+      let valY = y.innerText;
+
+      if(type === 'number') {
+         valX = parseFloat(valX.replace(/,/g, ''));
+         valY = parseFloat(valY.replace(/,/g, ''));
+      }
+
+      if (sortOrder == 1) {
+          if (valX < valY) { shouldSwitch = true; break; }
+      } else {
+          if (valX > valY) { shouldSwitch = true; break; }
+      }
+    }
+    if (shouldSwitch) {
+      rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+      switching = true;
+    }
+  }
+}
+
+// Bind Button
+$(document).ready(function() {
+    $("#analytics_btn").on("click", function() {
+        $("#analytics_menu").css("display", "flex");
+        run_analytics();
+    });
+});
