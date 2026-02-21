@@ -630,4 +630,26 @@ transition: width 0.3s ease;
 color: white;
 margin-top: 10px;
 font-size: 18px;
+
+}
+
+
+#analytics_table th {
+  cursor: pointer;
+  user-select: none;
+  background-color: #2c2e45;
+  position: sticky;
+  top: 0;
+}
+#analytics_table th:hover {
+  background-color: #4357af;
+}
+.analytics_row:hover {
+  background-color: #3a3d5a;
+}
+.positive-profit {
+  color: #55ff55;
+}
+.negative-profit {
+  color: #ffaa55;
 }
