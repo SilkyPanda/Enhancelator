@@ -124,6 +124,36 @@
       </section>
 		</div>
 	</div>
+  <div id="analytics_menu" class="info_menu" style="max-width: 900px; max-height: 90vh;">
+    <div>
+      <div class="close btn" onclick="$('#analytics_menu').css('display','none')"><p>&#10005;</p></div>
+      <h2>Enhancement Analytics</h2>
+      <p style="font-size: 0.9em; color: #ccc;">
+        Calculated based on your current settings (Buffs, Enhancer Lvl, Rates) and the <b>Target Level</b> set in the main window.<br>
+        "Cost" attempts to find the cheapest Protection method automatically.<br>
+        "Loss" = Total Cost - Vendor Sell Price of the result.<br>
+        <b>XP Ratio</b> = Total XP / Net Loss. Higher is better.
+      </p>
+      <div style="margin: 10px 0; display: flex; gap: 10px; align-items: center;">
+        <p id="analytics_status">Ready</p>
+      </div>
+      <div class="result" style="max-height: 60vh; overflow-y: auto; display: block;">
+        <table id="analytics_table" class="results_table" style="width: 100%;">
+          <thead>
+            <tr>
+              <th class="results_header_cells" onclick="sortTable(0, 'text')">Item ⇕</th>
+              <th class="results_header_cells" onclick="sortTable(1, 'number')">Lvl ⇕</th>
+              <th class="results_header_cells" onclick="sortTable(2, 'number')">Actions ⇕</th>
+              <th class="results_header_cells" onclick="sortTable(3, 'number')">Total XP ⇕</th>
+              <th class="results_header_cells" onclick="sortTable(4, 'number')">Net Cost (Loss) ⇕</th>
+              <th class="results_header_cells" onclick="sortTable(5, 'number')" style="background: #224422;">XP / 1 Gold ⇕</th>
+            </tr>
+          </thead>
+          <tbody id="analytics_table_body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
   <div id="sel_item_container" class="sel_item_container">
     <div style="display:flex">
       <p>Hide Junk: </p>
@@ -458,6 +488,9 @@
         </div>
       </div>
       <button id="sim_btn" class="sim_btn">Simulate</button>
+	  <div style="width: 100%; display: flex; justify-content: center; margin-top: 10px;">
+        <button id="analytics_btn" class="sim_btn" style="border-color: #98a7e9;">📊 Analytics (Best XP/Cost)</button>
+      </div>
       <div id="sim_result_wrapper">
         <h1>Simulation Results&nbsp;<span id="sim_info_btn" class="btn">&nbsp;?&nbsp;</span></h1>
         <div class="sim_result">
@@ -721,3 +754,4 @@
 	<script type="text/javascript" src="main.js"></script>
 </body>
 </html>
+
